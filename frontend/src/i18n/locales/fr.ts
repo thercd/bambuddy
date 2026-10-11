@@ -2472,6 +2472,8 @@ export default {
     gcodeEndLabel: 'G-code de fin',
     gcodeStartPlaceholder: 'G-code ajouté avant le début de l\'impression...',
     gcodeEndPlaceholder: 'G-code ajouté après la fin de l\'impression...',
+    gcodeRemovePurgeLine: 'Supprimer la ligne de purge',
+    gcodeRemovePurgeLineDescription: 'Purge dans la goulotte à déchets au lieu de tracer la ligne de purge sur le plateau (A1 et A1 mini). La calibration de la dynamique de débit trace toujours sa ligne lorsqu\'elle est activée.',
     staggerGroupSize: 'Taille du groupe',
     staggerGroupSizeHelp: 'Imprimantes à démarrer simultanément par groupe',
     staggerInterval: 'Intervalle (minutes)',

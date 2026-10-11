@@ -2517,6 +2517,8 @@ export default {
     gcodeEndLabel: 'End-G-Code',
     gcodeStartPlaceholder: 'G-code, der vor dem Druckstart eingefügt wird...',
     gcodeEndPlaceholder: 'G-code, der nach dem Druckende angefügt wird...',
+    gcodeRemovePurgeLine: 'Reinigungslinie entfernen',
+    gcodeRemovePurgeLineDescription: 'Spült in den Abfallschacht, statt die Reinigungslinie auf das Druckbett zu zeichnen (A1 und A1 mini). Die Flussdynamik-Kalibrierung zeichnet ihre Linie weiterhin, wenn sie aktiviert ist.',
     staggerGroupSize: 'Gruppengröße',
     staggerGroupSizeHelp: 'Anzahl gleichzeitig zu startender Drucker pro Gruppe',
     staggerInterval: 'Intervall (Minuten)',

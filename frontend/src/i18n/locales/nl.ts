@@ -2537,6 +2537,8 @@ export default {
     gcodeEndLabel: 'Eind-G-code',
     gcodeStartPlaceholder: 'G-code die vóór de start van de afdruk wordt toegevoegd...',
     gcodeEndPlaceholder: 'G-code die na afloop van de afdruk wordt toegevoegd...',
+    gcodeRemovePurgeLine: 'Purgelijn verwijderen',
+    gcodeRemovePurgeLineDescription: 'Purget in de afvalgoot in plaats van de purgelijn op het bed te tekenen (A1 en A1 mini). Flowdynamiek-kalibratie tekent nog steeds zijn lijn wanneer die is ingeschakeld.',
     staggerGroupSize: 'Groepsgrootte',
     staggerGroupSizeHelp: 'Aantal printers dat per groep gelijktijdig start',
     staggerInterval: 'Interval (minuten)',

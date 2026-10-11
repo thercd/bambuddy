@@ -8470,11 +8470,16 @@ class PrintScheduler:
                     model_snippets = snippets.get(printer.model, {})
                     start_gc = (model_snippets.get("start_gcode") or "").strip()
                     end_gc = (model_snippets.get("end_gcode") or "").strip()
-                    if start_gc or end_gc:
+                    strip_purge = bool(model_snippets.get("remove_purge_line"))
+                    if start_gc or end_gc or strip_purge:
                         from backend.app.utils.threemf_tools import inject_gcode_into_3mf
 
                         injected_path = inject_gcode_into_3mf(
-                            file_path, effective_plate_id, start_gc or None, end_gc or None
+                            file_path,
+                            effective_plate_id,
+                            start_gc or None,
+                            end_gc or None,
+                            strip_purge_line=strip_purge,
                         )
                         if injected_path:
                             file_path = injected_path

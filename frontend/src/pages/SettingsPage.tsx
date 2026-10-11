@@ -6151,7 +6151,10 @@ export function SettingsPage() {
                 {t('settings.gcodeInjectionDescription', 'Configure custom G-code to inject at the start and/or end of prints for auto-print systems like Farmloop, SwapMod, AutoClear, and Printflow 3D. Snippets are configured per printer model and applied when "Inject G-code" is enabled on a queue item.')}
               </p>
               {(() => {
-                const gcodeSnippets: Record<string, { start_gcode: string; end_gcode: string }> = (() => {
+                type GcodeSnippet = { start_gcode: string; end_gcode: string; remove_purge_line?: boolean };
+                // Models whose purge chute the backend knows (threemf_tools._PURGE_CHUTES).
+                const purgeChuteModels: Record<string, true> = { A1: true, 'A1 Mini': true };
+                const gcodeSnippets: Record<string, GcodeSnippet> = (() => {
                   try {
                     return localSettings.gcode_snippets ? JSON.parse(localSettings.gcode_snippets) : {};
                   } catch {
@@ -6160,14 +6163,14 @@ export function SettingsPage() {
                 })();
                 const printerModels = [...new Set((printers || []).filter((p) => p.model).map((p) => p.model as string))].sort();
 
-                const updateSnippet = (model: string, field: 'start_gcode' | 'end_gcode', value: string) => {
-                  const updated = { ...gcodeSnippets };
-                  if (!updated[model]) {
-                    updated[model] = { start_gcode: '', end_gcode: '' };
+                const updateSnippet = (model: string, patch: Partial<GcodeSnippet>) => {
+                  const entry: GcodeSnippet = { start_gcode: '', end_gcode: '', ...gcodeSnippets[model], ...patch };
+                  if (!entry.remove_purge_line) {
+                    delete entry.remove_purge_line;
                   }
-                  updated[model][field] = value;
-                  // Remove model entry if both fields are empty
-                  if (!updated[model].start_gcode && !updated[model].end_gcode) {
+                  const updated = { ...gcodeSnippets, [model]: entry };
+                  // Remove model entry once nothing is configured for it
+                  if (!entry.start_gcode && !entry.end_gcode && !entry.remove_purge_line) {
                     delete updated[model];
                   }
                   const newValue = Object.keys(updated).length > 0 ? JSON.stringify(updated) : '';
@@ -6192,8 +6195,8 @@ export function SettingsPage() {
                 }
 
                 return printerModels.map((model) => {
-                  const snippet = gcodeSnippets[model] || { start_gcode: '', end_gcode: '' };
-                  const hasContent = !!(snippet.start_gcode || snippet.end_gcode);
+                  const snippet: GcodeSnippet = gcodeSnippets[model] || { start_gcode: '', end_gcode: '' };
+                  const hasContent = !!(snippet.start_gcode || snippet.end_gcode || snippet.remove_purge_line);
                   return (
                     <Collapsible
                       key={model}
@@ -6217,7 +6220,7 @@ export function SettingsPage() {
                           </label>
                           <textarea
                             value={snippet.start_gcode}
-                            onChange={(e) => updateSnippet(model, 'start_gcode', e.target.value)}
+                            onChange={(e) => updateSnippet(model, { start_gcode: e.target.value })}
                             onBlur={saveGcodeSnippets}
                             placeholder={t('settings.gcodeStartPlaceholder', 'G-code prepended before the print starts...')}
                             rows={3}
@@ -6230,13 +6233,38 @@ export function SettingsPage() {
                           </label>
                           <textarea
                             value={snippet.end_gcode}
-                            onChange={(e) => updateSnippet(model, 'end_gcode', e.target.value)}
+                            onChange={(e) => updateSnippet(model, { end_gcode: e.target.value })}
                             onBlur={saveGcodeSnippets}
                             placeholder={t('settings.gcodeEndPlaceholder', 'G-code appended after the print ends...')}
                             rows={3}
                             className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-xs font-mono focus:outline-none focus:border-bambu-green resize-y"
                           />
                         </div>
+                        {(purgeChuteModels[model] || snippet.remove_purge_line) && (
+                        <div className="flex items-center justify-between gap-3 pt-1">
+                          <div>
+                            <p className="text-sm text-white">
+                              {t('settings.gcodeRemovePurgeLine', 'Remove purge line')}
+                            </p>
+                            <p className="text-xs text-bambu-gray">
+                              {t('settings.gcodeRemovePurgeLineDescription', 'Purges into the waste chute instead of drawing the purge line on the bed (A1 and A1 mini). Flow dynamics calibration still draws its line when enabled.')}
+                            </p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                            <input
+                              type="checkbox"
+                              aria-label={t('settings.gcodeRemovePurgeLine', 'Remove purge line')}
+                              checked={!!snippet.remove_purge_line}
+                              onChange={(e) => {
+                                updateSnippet(model, { remove_purge_line: e.target.checked });
+                                saveGcodeSnippets();
+                              }}
+                              className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
+                          </label>
+                        </div>
+                        )}
                       </div>
                     </Collapsible>
                   );

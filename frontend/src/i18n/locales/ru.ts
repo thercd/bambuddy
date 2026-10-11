@@ -2396,6 +2396,8 @@ export default {
     gcodeEndLabel: "Завершающий G-код",
     gcodeStartPlaceholder: "G-код, добавляемый перед началом печати…",
     gcodeEndPlaceholder: "G-код, добавляемый после завершения печати…",
+    gcodeRemovePurgeLine: "Удалить линию очистки",
+    gcodeRemovePurgeLineDescription: "Выполняет очистку в лоток для отходов вместо рисования линии очистки на столе (A1 и A1 mini). Калибровка динамики потока по-прежнему рисует свою линию, если она включена.",
     staggerGroupSize: "Размер группы",
     staggerGroupSizeHelp: "Количество принтеров, запускаемых одновременно",
     staggerInterval: "Интервал (мин)",

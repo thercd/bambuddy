@@ -2472,6 +2472,8 @@ export default {
     gcodeEndLabel: 'G-code finale',
     gcodeStartPlaceholder: 'G-code inserito prima dell\'inizio della stampa...',
     gcodeEndPlaceholder: 'G-code aggiunto dopo la fine della stampa...',
+    gcodeRemovePurgeLine: 'Rimuovi linea di spurgo',
+    gcodeRemovePurgeLineDescription: 'Spurga nello scivolo di scarico invece di disegnare la linea di spurgo sul piatto (A1 e A1 mini). La calibrazione della dinamica del flusso disegna ancora la sua linea quando è attiva.',
     staggerGroupSize: 'Dimensione gruppo',
     staggerGroupSizeHelp: 'Stampanti da avviare simultaneamente per gruppo',
     staggerInterval: 'Intervallo (minuti)',

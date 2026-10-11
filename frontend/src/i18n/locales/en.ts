@@ -2539,6 +2539,8 @@ export default {
     gcodeEndLabel: 'End G-code',
     gcodeStartPlaceholder: 'G-code prepended before the print starts...',
     gcodeEndPlaceholder: 'G-code appended after the print ends...',
+    gcodeRemovePurgeLine: 'Remove purge line',
+    gcodeRemovePurgeLineDescription: 'Purges into the waste chute instead of drawing the purge line on the bed (A1 and A1 mini). Flow dynamics calibration still draws its line when enabled.',
     staggerGroupSize: 'Group size',
     staggerGroupSizeHelp: 'Printers to start simultaneously per group',
     staggerInterval: 'Interval (minutes)',

@@ -2536,6 +2536,8 @@ export default {
     gcodeEndLabel: 'Slut-G-kod',
     gcodeStartPlaceholder: 'G-kod som läggs till före utskriftens start...',
     gcodeEndPlaceholder: 'G-kod som läggs till efter utskriftens slut...',
+    gcodeRemovePurgeLine: 'Ta bort rensningslinje',
+    gcodeRemovePurgeLineDescription: 'Rensar i avfallsrännan i stället för att rita rensningslinjen på bädden (A1 och A1 mini). Flödesdynamikkalibrering ritar fortfarande sin linje när den är aktiverad.',
     staggerGroupSize: 'Gruppstorlek',
     staggerGroupSizeHelp: 'Skrivare som startar samtidigt per grupp',
     staggerInterval: 'Intervall (minuter)',

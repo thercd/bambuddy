@@ -2236,6 +2236,73 @@ describe('SettingsPage', () => {
       );
     });
   });
+
+  // --------------------------------------------------------------------
+  describe('remove purge line toggle (#3297)', () => {
+    const toggleLabel = 'Remove purge line';
+
+    const renderWithSnippets = async (gcodeSnippets: string) => {
+      let saved: Record<string, unknown> | null = null;
+      server.use(
+        http.get('/api/v1/settings/', () => HttpResponse.json({ ...mockSettings, gcode_snippets: gcodeSnippets })),
+        http.get('/api/v1/printers/', () => HttpResponse.json([{ id: 1, name: 'Felizona', model: 'A1' }])),
+        http.put('/api/v1/settings/', async ({ request }) => {
+          const body = (await request.json()) as Record<string, unknown>;
+          // The page's debounced auto-save sends other fields too; only the
+          // toggle's own save carries the snippets.
+          if ('gcode_snippets' in body) saved = body;
+          return HttpResponse.json({ ...mockSettings, ...body });
+        }),
+      );
+      render(<SettingsPage />);
+      const user = userEvent.setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Workflow' })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: 'Workflow' }));
+      const toggle = await screen.findByRole('checkbox', { name: toggleLabel });
+      return { user, toggle, saved: () => saved };
+    };
+
+    it('keeps existing snippets when the toggle is turned on', async () => {
+      const { user, toggle, saved } = await renderWithSnippets('{"A1":{"start_gcode":"","end_gcode":"M400"}}');
+      expect(toggle).not.toBeChecked();
+
+      await user.click(toggle);
+
+      await waitFor(() => expect(saved()).not.toBeNull());
+      expect(JSON.parse(saved()!.gcode_snippets as string)).toEqual({
+        A1: { start_gcode: '', end_gcode: 'M400', remove_purge_line: true },
+      });
+    });
+
+    it('drops the model entry when turning it off leaves nothing configured', async () => {
+      const { user, toggle, saved } = await renderWithSnippets(
+        '{"A1":{"start_gcode":"","end_gcode":"","remove_purge_line":true}}',
+      );
+      expect(toggle).toBeChecked();
+
+      await user.click(toggle);
+
+      await waitFor(() => expect(saved()).not.toBeNull());
+      expect(saved()!.gcode_snippets).toBe('');
+    });
+
+    it('is not offered for a model without a known purge chute', async () => {
+      server.use(
+        http.get('/api/v1/settings/', () =>
+          HttpResponse.json({ ...mockSettings, gcode_snippets: '{"P1S":{"start_gcode":"","end_gcode":"M400"}}' }),
+        ),
+        http.get('/api/v1/printers/', () => HttpResponse.json([{ id: 1, name: 'Box', model: 'P1S' }])),
+      );
+      render(<SettingsPage />);
+      const user = userEvent.setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Workflow' })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: 'Workflow' }));
+
+      // The P1S card is open (it has a snippet), so its fields are rendered.
+      expect(await screen.findByDisplayValue('M400')).toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: toggleLabel })).not.toBeInTheDocument();
+    });
+  });
 });
 
 /**

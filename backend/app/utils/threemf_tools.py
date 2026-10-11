@@ -12,7 +12,7 @@ import math
 import re
 import zipfile
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Lock
 
@@ -1129,6 +1129,71 @@ _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 _START_GCODE_END_MARKER = "; MACHINE_START_GCODE_END"
 _EXECUTABLE_BLOCK_END_MARKER = "; EXECUTABLE_BLOCK_END"
 
+# Start-sequence blocks that lay filament on the bed: the prime line
+# (`nozzle load line`; newer Bambu profiles spell it `noozle`), the X1's
+# `purge line to wipe the nozzle`, and the A1-family pressure-advance test
+# line (`extrude cali test`). Their `... end` markers close a block, not open one.
+_PURGE_BLOCK_HEADER_RE = re.compile(
+    r"^\s*;=+\s*(?:no+z+le load line|purge line|extrude cali test)\b(?!.*\bend\b)", re.IGNORECASE
+)
+_START_BLOCK_HEADER_RE = re.compile(r"^\s*;=+")
+_MOTION_RE = re.compile(r"^\s*G([0-3])(?![\d.])([^;]*)", re.IGNORECASE)
+_AXIS_WORD_RE = re.compile(r"([XYZE])\s*([-+]?(?:\d+\.?\d*|\.\d+))", re.IGNORECASE)
+_POSITIONING_MODE_RE = re.compile(r"^\s*G9([01])(?![\d.])", re.IGNORECASE)
+_EXTRUSION_MODE_RE = re.compile(r"^\s*M8([23])(?![\d.])", re.IGNORECASE)
+# Homing, bed probing and probe moves leave the toolhead somewhere G-code can't tell.
+_POSITION_UNKNOWN_RE = re.compile(r"^\s*(?:G28|G29|G380)(?![\d])", re.IGNORECASE)
+# `M900 S` / `M900 C` / `M900 R` bracket the A1's measurement of the test
+# line; without the line there is nothing to measure.
+_PA_LINE_MEASURE_RE = re.compile(r"^\s*M900\s+[SCR]\s*(?:;.*)?$", re.IGNORECASE)
+_FIRMWARE_IF_RE = re.compile(r"^\s*M622\b", re.IGNORECASE)
+_FIRMWARE_ENDIF_RE = re.compile(r"^\s*M623\b", re.IGNORECASE)
+_PRINTER_MODEL_RE = re.compile(r"^;\s*printer_model\s*=\s*(.+?)\s*$", re.MULTILINE)
+_PURGE_REMOVED_PREFIX = "; [bambuddy: purge line removed] "
+
+
+@dataclass(frozen=True)
+class _PurgeChute:
+    """Off-bed spot where a printer's own start G-code purges and wipes the nozzle."""
+
+    x: float
+    y: float
+    z: float
+    wipe_x: float
+
+
+# Copied from each model's stock start G-code: the A1 purges at X-48.2 and
+# wipes towards X-28.5 (`auto extrude cali`), the A1 mini purges at X-13.5 and
+# wipes towards X0 (`nozzle load line`). Keyed by the lowercased
+# `; printer_model =` value the slicer writes into the plate G-code.
+_PURGE_CHUTES = {
+    "bambu lab a1": _PurgeChute(x=-48.2, y=0.0, z=10.0, wipe_x=-28.5),
+    "bambu lab a1 mini": _PurgeChute(x=-13.5, y=0.0, z=10.0, wipe_x=0.0),
+}
+
+
+@dataclass
+class _ToolheadState:
+    """Positioning modes and XYZ position as far as the G-code determines them."""
+
+    absolute: bool = True
+    relative_e: bool = False
+    x: float | None = None
+    y: float | None = None
+    z: float | None = None
+
+
+@dataclass
+class _PurgeRegion:
+    """Unconditional stretch of a purge block (between headers / `M622 … M623`)."""
+
+    first: int
+    commented: list[int] = field(default_factory=list)
+    extruded: float = 0.0
+    on_bed: bool = False
+    relative_e: bool = True
+    end: _ToolheadState | None = None
+
 
 def _parse_3mf_gcode_header(content: str) -> dict[str, str]:
     """Parse the `; HEADER_BLOCK_START..END` block into a normalised dict.
@@ -1375,11 +1440,190 @@ def _inject_end_before_marker(content: str, snippet: str) -> str:
     return content[:line_start] + snippet.rstrip("\n") + "\n" + content[line_start:]
 
 
+def _gcode_number(value: float) -> str:
+    text = f"{value:.4f}".rstrip("0").rstrip(".")
+    return "0" if text in ("", "-0") else text
+
+
+def _track_motion(state: _ToolheadState, line: str, conditional: bool) -> float | None:
+    """Apply a G0–G3 move to `state`; return its E amount, or None if not a move.
+
+    Moves inside firmware conditionals may or may not run, so the axes they
+    touch become unknown.
+    """
+    match = _MOTION_RE.match(line)
+    if not match:
+        return None
+    words = {axis.upper(): float(value) for axis, value in _AXIS_WORD_RE.findall(match.group(2))}
+    for axis in ("x", "y", "z"):
+        if axis.upper() not in words:
+            continue
+        current = getattr(state, axis)
+        if conditional:
+            new = None
+        elif state.absolute:
+            new = words[axis.upper()]
+        else:
+            new = None if current is None else current + words[axis.upper()]
+        setattr(state, axis, new)
+    return words.get("E", 0.0)
+
+
+def _chute_purge_lines(chute: _PurgeChute, region: _PurgeRegion) -> list[str]:
+    """Purge and wipe at the chute, then return to where the original block ended."""
+    end = region.end
+    x, wipe = _gcode_number(chute.x), _gcode_number(chute.wipe_x)
+    lines = [
+        "; [bambuddy] purge into the chute instead of on the bed",
+        "G90",
+        "M83",
+        f"G1 E{_gcode_number(region.extruded)} F300",
+        "M106 P1 S255",
+        "M400 S5",
+        f"G1 X{wipe} F18000",
+        f"G1 X{x} F3000",
+        f"G1 X{wipe} F18000 ;wipe and shake",
+        f"G1 X{x} F3000",
+        f"G1 X{wipe} F12000 ;wipe and shake",
+        f"G1 X{x} F3000",
+        "M400",
+        "M106 P1 S0",
+        f"G1 X{_gcode_number(end.x)} Y{_gcode_number(end.y)} F30000",
+        f"G1 Z{_gcode_number(end.z)} F1200",
+    ]
+    if not end.absolute:
+        lines.append("G91")
+    if not end.relative_e:
+        lines.append("M82")
+    return lines
+
+
+def remove_purge_line(content: str) -> tuple[str, int]:
+    """Move the purge/prime line the start sequence draws on the bed into the chute.
+
+    Only the printer start sequence (everything before
+    `; MACHINE_START_GCODE_END`) is touched, and only the unconditional parts
+    of the purge blocks matched by `_PURGE_BLOCK_HEADER_RE` that extrude on the
+    bed. In those parts every move and the `M900 S/C/R` measurement of the test
+    line are commented out. Instead, the nozzle lifts and travels to the
+    model's purge chute, where the block's own heat-up wait now runs. It
+    extrudes the same amount there, wipes, and returns to exactly where the
+    original block would have left it, so the G-code that follows runs
+    unchanged. Only commenting the line out is not enough: the nozzle would
+    still heat up over the bed and dab the ooze onto it.
+
+    Firmware-conditional sections (`M622 … M623`, e.g. the flow-dynamics
+    calibration gated by `M1002 judge_flag extrude_cali_flag`) are left
+    intact: the printer decides at runtime whether to run them, and a user
+    who enables calibration still gets the line it needs.
+
+    Printers without a known chute (`_PURGE_CHUTES`), and blocks whose end
+    position the G-code doesn't determine, are left unchanged.
+
+    Returns:
+        The rewritten G-code and the number of lines commented out.
+    """
+    marker_idx = content.find(_START_GCODE_END_MARKER)
+    if marker_idx == -1:
+        logger.warning("Purge line removal: '%s' not found, leaving G-code unchanged", _START_GCODE_END_MARKER)
+        return content, 0
+    model_match = _PRINTER_MODEL_RE.search(content)
+    model = model_match.group(1) if model_match else None
+    chute = _PURGE_CHUTES.get(model.lower()) if model else None
+    if chute is None:
+        logger.warning("Purge line removal: no purge chute known for printer model %r, leaving G-code unchanged", model)
+        return content, 0
+
+    lines = content[:marker_idx].split("\n")
+    state = _ToolheadState()
+    regions: list[_PurgeRegion] = []
+    region: _PurgeRegion | None = None
+    in_purge_block = False
+    conditional_depth = 0
+
+    def close_region() -> None:
+        nonlocal region
+        if region is not None:
+            region.end = replace(state)
+            regions.append(region)
+            region = None
+
+    for i, line in enumerate(lines):
+        if _START_BLOCK_HEADER_RE.match(line):
+            close_region()
+            in_purge_block = bool(_PURGE_BLOCK_HEADER_RE.match(line))
+            if in_purge_block and not conditional_depth:
+                region = _PurgeRegion(first=i + 1)
+            continue
+        if _FIRMWARE_IF_RE.match(line):
+            close_region()
+            conditional_depth += 1
+            continue
+        if _FIRMWARE_ENDIF_RE.match(line):
+            conditional_depth = max(0, conditional_depth - 1)
+            if in_purge_block and not conditional_depth:
+                region = _PurgeRegion(first=i + 1)
+            continue
+
+        if mode := _POSITIONING_MODE_RE.match(line):
+            state.absolute = mode.group(1) == "0"
+        elif mode := _EXTRUSION_MODE_RE.match(line):
+            state.relative_e = mode.group(1) == "3"
+        elif _POSITION_UNKNOWN_RE.match(line):
+            state.x = state.y = state.z = None
+
+        start_x = state.x
+        extruded = _track_motion(state, line, conditional=bool(conditional_depth))
+        if region is None:
+            continue
+        if extruded is not None:
+            region.commented.append(i)
+            if extruded > 0:
+                region.extruded += extruded
+                region.relative_e = region.relative_e and state.relative_e
+                if any(x is not None and x >= 0 for x in (start_x, state.x)):
+                    region.on_bed = True
+        elif _PA_LINE_MEASURE_RE.match(line):
+            region.commented.append(i)
+    close_region()
+
+    insert_before: dict[int, list[str]] = {}
+    insert_after: dict[int, list[str]] = {}
+    commented: set[int] = set()
+    for r in regions:
+        if not (r.on_bed and r.extruded > 0):
+            continue
+        end = r.end
+        if not r.relative_e or end is None or None in (end.x, end.y, end.z):
+            logger.warning(
+                "Purge line removal: purge block at line %d has no determinable end position, leaving it unchanged",
+                r.first,
+            )
+            continue
+        insert_before[r.first] = [
+            "; [bambuddy] move to the purge chute before heating up",
+            "G90",
+            f"G1 Z{_gcode_number(chute.z)} F1200",
+            f"G1 X{_gcode_number(chute.x)} Y{_gcode_number(chute.y)} F30000",
+        ]
+        insert_after[r.commented[-1]] = _chute_purge_lines(chute, r)
+        commented.update(r.commented)
+
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        out.extend(insert_before.get(i, ()))
+        out.append(_PURGE_REMOVED_PREFIX + line.lstrip() if i in commented else line)
+        out.extend(insert_after.get(i, ()))
+    return "\n".join(out) + content[marker_idx:], len(commented)
+
+
 def inject_gcode_into_3mf(
     source_path: Path,
     plate_id: int,
     start_gcode: str | None,
     end_gcode: str | None,
+    *,
+    strip_purge_line: bool = False,
 ):
     """Create a temp copy of a 3MF with G-code injected at start/end.
 
@@ -1390,6 +1634,9 @@ def inject_gcode_into_3mf(
     before `; EXECUTABLE_BLOCK_END` so they run inside the executable block —
     Bambu firmware (P1S) ignores g-code placed after that marker.
 
+    With `strip_purge_line`, the purge/prime line in the printer's start
+    sequence is commented out first (see `remove_purge_line`).
+
     The plate's `.gcode.md5` sidecar is recomputed so firmware that validates
     it against the gcode (e.g. P1S) still accepts the modified file.
 
@@ -1398,6 +1645,7 @@ def inject_gcode_into_3mf(
         plate_id: Plate number (1-indexed) to inject into.
         start_gcode: G-code to insert after printer startup, or None.
         end_gcode: G-code to append, or None.
+        strip_purge_line: Comment out the start-sequence purge line.
 
     Returns:
         Path to temp file with injected G-code, or None if injection failed.
@@ -1405,7 +1653,7 @@ def inject_gcode_into_3mf(
     """
     import tempfile
 
-    if not start_gcode and not end_gcode:
+    if not start_gcode and not end_gcode and not strip_purge_line:
         return None
 
     try:
@@ -1420,6 +1668,10 @@ def inject_gcode_into_3mf(
             # Read and modify gcode content
             gcode_content = zf.read(target_gcode).decode("utf-8", errors="ignore")
             header = _parse_3mf_gcode_header(gcode_content)
+
+            if strip_purge_line:
+                gcode_content, removed = remove_purge_line(gcode_content)
+                logger.info("Purge line removal [%s]: commented out %d line(s)", target_gcode, removed)
 
             if start_gcode:
                 resolved = _substitute_placeholders(start_gcode, header)

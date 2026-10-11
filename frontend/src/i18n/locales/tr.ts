@@ -2520,6 +2520,8 @@ export default {
     gcodeEndLabel: 'Bitiş G-kodu',
     gcodeStartPlaceholder: 'Baskı başlamadan önce eklenecek G-kodu...',
     gcodeEndPlaceholder: 'Baskı bittikten sonra eklenecek G-kodu...',
+    gcodeRemovePurgeLine: 'Temizleme çizgisini kaldır',
+    gcodeRemovePurgeLineDescription: 'Temizleme çizgisini tablaya çizmek yerine atık kanalına temizleme yapar (A1 ve A1 mini). Akış dinamiği kalibrasyonu etkinse çizgisini çizmeye devam eder.',
     staggerGroupSize: 'Grup boyutu',
     staggerGroupSizeHelp: 'Grup başına eş zamanlı başlatılacak yazıcılar',
     staggerInterval: 'Aralık (dakika)',

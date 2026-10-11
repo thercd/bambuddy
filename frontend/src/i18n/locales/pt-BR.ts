@@ -2472,6 +2472,8 @@ export default {
     gcodeEndLabel: 'G-code final',
     gcodeStartPlaceholder: 'G-code inserido antes do início da impressão...',
     gcodeEndPlaceholder: 'G-code adicionado após o término da impressão...',
+    gcodeRemovePurgeLine: 'Remover linha de purga',
+    gcodeRemovePurgeLineDescription: 'Purga na rampa de descarte em vez de desenhar a linha de purga na mesa (A1 e A1 mini). A calibração de fluxo dinâmico ainda desenha sua linha quando ativada.',
     staggerGroupSize: 'Tamanho do grupo',
     staggerGroupSizeHelp: 'Impressoras para iniciar simultaneamente por grupo',
     staggerInterval: 'Intervalo (minutos)',

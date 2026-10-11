@@ -10,6 +10,7 @@ from backend.app.utils.threemf_tools import (
     _parse_3mf_gcode_header,
     _substitute_placeholders,
     inject_gcode_into_3mf,
+    remove_purge_line,
 )
 
 
@@ -542,3 +543,135 @@ class TestStartMarkerHelper:
         content = "G28\nG1 X0\n"
         result = _inject_start_at_marker(content, "INJECTED")
         assert result == "INJECTED\nG28\nG1 X0\n"
+
+
+# Start sequence shaped like the A1's: the nozzle parked at the front edge, the
+# bed line already commented out by the profile, then the pressure-advance
+# test line — an unconditional part and a firmware-gated calibration part.
+_A1_START = """\
+; printer_model = Bambu Lab A1
+; machine_start_gcode = ;===== nozzle load line =====\\nG0 X128 E8
+G1 X108.000 Y-0.500 F30000
+G1 Z0.300 F1200
+M104 S220 ; prepare to print
+;===== nozzle load line ===============================
+;G1 E2 F300
+;G1 X168 E4.989 F6000
+;===== nozzle load line end ===========================
+;===== extrude cali test ===============================
+M400
+    M900 S
+    M900 C
+    G90
+    M83
+    M109 S220
+    G0 X128 E8  F720
+    G0 X133 E.3742  F1200
+    G91
+    G1 X1 Z-0.300
+    G1 X4
+    G1 Z1 F1200
+    G90
+    M400
+M900 R
+M1002 judge_flag extrude_cali_flag
+M622 J1
+    G90
+    G1 X108.000 Y1.000 F30000
+    G91
+    G1 Z-0.700 F1200
+    G0 X128 E10  F720
+M623
+G1 Z0.2
+;========turn off light and wait extrude temperature =============
+G1 X10 E2
+; MACHINE_START_GCODE_END
+G1 X100 Y100 E5
+"""
+
+_REMOVED = "; [bambuddy: purge line removed] "
+
+
+def _purge_region(gcode: str) -> list[str]:
+    """Lines from the `extrude cali test` header up to the calibration conditional."""
+    lines = gcode.split("\n")
+    start = lines.index(";===== extrude cali test ===============================")
+    return lines[start + 1 : lines.index("M1002 judge_flag extrude_cali_flag")]
+
+
+class TestRemovePurgeLine:
+    """`remove_purge_line` moves the on-bed purge into the printer's chute."""
+
+    def test_nozzle_reaches_chute_before_heating_up(self):
+        region = _purge_region(remove_purge_line(_A1_START)[0])
+        heat = region.index("    M109 S220")
+        assert region.index("G1 Z10 F1200") < region.index("G1 X-48.2 Y0 F30000") < heat
+
+    def test_no_bed_moves_or_measurement_left_in_purge_part(self):
+        result, removed = remove_purge_line(_A1_START)
+        assert removed == 8
+        original = [line.strip() for line in _purge_region(_A1_START)]
+        for cmd in ("M900 S", "M900 C", "G0 X128 E8  F720", "G1 X1 Z-0.300", "G1 X4", "G1 Z1 F1200", "M900 R"):
+            assert cmd in original
+            assert _REMOVED + cmd in result
+
+    def test_same_amount_purged_at_chute_then_back_to_original_end_position(self):
+        region = _purge_region(remove_purge_line(_A1_START)[0])
+        purge = region.index("G1 E8.3742 F300")
+        wipe = region.index("G1 X-28.5 F18000 ;wipe and shake")
+        # Original end: X133 + 1 + 4, Y-0.5, Z 0.3 - 0.3 + 1 — what the calibration part expects.
+        assert purge < wipe < region.index("G1 X138 Y-0.5 F30000") < region.index("G1 Z1 F1200")
+        assert region[-1] == "G1 Z1 F1200"
+
+    def test_firmware_conditional_calibration_untouched(self):
+        result, _ = remove_purge_line(_A1_START)
+        assert (
+            "M622 J1\n    G90\n    G1 X108.000 Y1.000 F30000\n    G91\n    G1 Z-0.700 F1200\n"
+            "    G0 X128 E10  F720\nM623\nG1 Z0.2\n"
+        ) in result
+
+    def test_gcode_outside_purge_blocks_and_after_start_untouched(self):
+        result, _ = remove_purge_line(_A1_START)
+        assert result.startswith(_A1_START[: _A1_START.index(";===== extrude cali test")])
+        assert result.endswith(_A1_START[_A1_START.index(";========turn off light") :])
+
+    def test_a1_mini_chute_extrusion_is_not_a_bed_line(self):
+        content = (
+            "; printer_model = Bambu Lab A1 mini\n"
+            ";===== nozzle load line ===============================\n"
+            "G90\nM83\nG1 X-13.5 Y0 Z10 F10000\nG1 E1.2 F500\nM109 S220\n"
+            "; MACHINE_START_GCODE_END\n"
+        )
+        assert remove_purge_line(content) == (content, 0)
+
+    def test_printer_without_known_chute_unchanged(self):
+        content = _A1_START.replace("Bambu Lab A1", "Bambu Lab P1S")
+        assert remove_purge_line(content) == (content, 0)
+
+    def test_undeterminable_end_position_unchanged(self):
+        content = _A1_START.replace("G1 X108.000 Y-0.500 F30000\n", "G28\n")
+        assert remove_purge_line(content) == (content, 0)
+
+    def test_missing_start_marker_leaves_gcode_unchanged(self):
+        content = _A1_START.replace("; MACHINE_START_GCODE_END\n", "")
+        assert remove_purge_line(content) == (content, 0)
+
+    def test_strip_alone_rewrites_3mf_and_md5(self):
+        """Purge removal without any snippet must still produce a file."""
+        source = _make_temp_path()
+        with zipfile.ZipFile(source, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("Metadata/plate_1.gcode", _A1_START)
+            zf.writestr("Metadata/plate_1.gcode.md5", "STALEHASHVALUE")
+        result = None
+        try:
+            result = inject_gcode_into_3mf(source, 1, None, None, strip_purge_line=True)
+            assert result is not None
+            with zipfile.ZipFile(result, "r") as zf:
+                gcode = zf.read("Metadata/plate_1.gcode")
+                sidecar = zf.read("Metadata/plate_1.gcode.md5")
+            assert (_REMOVED + "G0 X128 E8  F720").encode() in gcode
+            assert sidecar == hashlib.md5(gcode, usedforsecurity=False).hexdigest().upper().encode("ascii")
+        finally:
+            source.unlink(missing_ok=True)
+            if result:
+                result.unlink(missing_ok=True)

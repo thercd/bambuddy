@@ -2516,6 +2516,8 @@ export default {
     gcodeEndLabel: '終了G-code',
     gcodeStartPlaceholder: '印刷開始前に挿入されるG-code...',
     gcodeEndPlaceholder: '印刷終了後に追加されるG-code...',
+    gcodeRemovePurgeLine: 'パージラインを削除',
+    gcodeRemovePurgeLineDescription: 'ベッド上にパージラインを描く代わりに、廃棄シュートでパージします（A1およびA1 mini）。フローダイナミクスキャリブレーションが有効な場合は、そのラインが引き続き描かれます。',
     staggerGroupSize: 'グループサイズ',
     staggerGroupSizeHelp: 'グループあたり同時に開始するプリンター数',
     staggerInterval: '間隔（分）',

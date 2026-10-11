@@ -1183,8 +1183,8 @@ class VirtualPrinterInstance:
                             confirm_outcome=confirm_outcome,
                             # Per-VP opt-in for auto-print G-code injection (#1516).
                             # Default off; when on, the scheduler still no-ops unless
-                            # gcode_snippets are configured for the target model, so it's
-                            # effectively "inject when enabled AND snippets exist".
+                            # gcode_snippets configure snippets or purge-line removal for
+                            # the target model.
                             gcode_injection=self.gcode_injection,
                             # H2C rack-swap slicer pick (#1780). Captured above;
                             # stamped on every plate so a multi-plate Send All keeps

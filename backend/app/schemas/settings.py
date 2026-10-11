@@ -201,7 +201,7 @@ class AppSettings(BaseModel):
     # Auto-print G-code injection (#422)
     gcode_snippets: str = Field(
         default="",
-        description="JSON: per-model G-code injection snippets {model: {start_gcode, end_gcode}}",
+        description="JSON: per-model G-code injection settings {model: {start_gcode, end_gcode, remove_purge_line}}",
     )
 
     # Scheduled local backup (#884)

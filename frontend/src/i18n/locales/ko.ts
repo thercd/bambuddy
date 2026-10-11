@@ -2393,6 +2393,8 @@ export default {
     gcodeEndLabel: '종료 G코드',
     gcodeStartPlaceholder: '인쇄 시작 전 앞에 추가되는 G코드...',
     gcodeEndPlaceholder: '인쇄 종료 후 뒤에 추가되는 G코드...',
+    gcodeRemovePurgeLine: '퍼지 라인 제거',
+    gcodeRemovePurgeLineDescription: '베드에 퍼지 라인을 그리는 대신 폐기 슈트에서 퍼지합니다(A1 및 A1 mini). 유량 동역학 보정이 켜져 있으면 해당 라인은 계속 그려집니다.',
     staggerGroupSize: '그룹 크기',
     staggerGroupSizeHelp: '그룹당 동시에 시작할 프린터 수',
     staggerInterval: '간격 (분)',

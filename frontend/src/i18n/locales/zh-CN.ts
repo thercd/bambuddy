@@ -2517,6 +2517,8 @@ export default {
     gcodeEndLabel: '结束G-code',
     gcodeStartPlaceholder: '在打印开始前插入的G-code...',
     gcodeEndPlaceholder: '在打印结束后追加的G-code...',
+    gcodeRemovePurgeLine: '移除冲刷线',
+    gcodeRemovePurgeLineDescription: '在废料槽中冲刷，而不是在热床上绘制冲刷线（A1 和 A1 mini）。启用流量动态校准时仍会绘制其校准线。',
     staggerGroupSize: '组大小',
     staggerGroupSizeHelp: '每组同时启动的打印机数量',
     staggerInterval: '间隔（分钟）',
