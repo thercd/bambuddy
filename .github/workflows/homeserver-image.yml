@@ -1,0 +1,190 @@
+name: Homeserver image
+
+# Rebuilds the latest stable maziggy/bambuddy release with the commits of
+# PATCH_BRANCH on top and publishes ghcr.io/<owner>/bambuddy:<version>-hs.
+# Versions are padded to four components (1.2.6 -> 1.2.6.0-hs) so the
+# homeserver's update checker, which compares tags with the same component
+# count and suffix, sees every release as a newer 1.2.5.7-hs.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Upstream tag to build (default: latest stable release)"
+        required: false
+      force:
+        description: "Rebuild even if the image tag already exists"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+  issues: write
+
+concurrency:
+  group: homeserver-image
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: maziggy/bambuddy
+  PATCH_BRANCH: feat/remove-purge-line
+  FEATURE_MARKER: remove_purge_line
+  ISSUE_TITLE: "Homeserver image build needs attention"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve upstream release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_VERSION:-}"
+          if [ -z "$tag" ]; then
+            tag=$(gh release list -R "$UPSTREAM" --exclude-pre-releases --exclude-drafts --limit 20 \
+              --json tagName --jq '.[].tagName' | grep -E '^v[0-9]+(\.[0-9]+)+$' | head -n 1)
+          fi
+          [ -n "$tag" ] || { echo "No stable upstream release found" >&2; exit 1; }
+          version="${tag#v}"
+          IFS=. read -r -a parts <<< "$version"
+          while [ "${#parts[@]}" -lt 4 ]; do parts+=(0); done
+          image_tag="$(IFS=.; echo "${parts[*]}")-hs"
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/${owner}/bambuddy"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+          echo "Upstream $tag -> $image:$image_tag"
+
+      - name: Skip if already published
+        id: exists
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          if [ "${FORCE:-false}" != "true" ] && docker manifest inspect \
+              "${{ steps.release.outputs.image }}:${{ steps.release.outputs.image_tag }}" >/dev/null 2>&1; then
+            echo "Image already published; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out upstream release
+        if: steps.exists.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM }}
+          ref: ${{ steps.release.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Apply homeserver patch
+        id: patch
+        if: steps.exists.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if grep -rqs "$FEATURE_MARKER" backend/app/utils/threemf_tools.py; then
+            echo "reason=upstream ${{ steps.release.outputs.tag }} already contains \`$FEATURE_MARKER\`: switch the homeserver back to ghcr.io/maziggy/bambuddy and retire this fork." >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          git remote add fork "https://github.com/${{ github.repository }}.git"
+          git fetch -q fork "$PATCH_BRANCH"
+          git fetch -q origin dev
+          commits=$(git rev-list --reverse "origin/dev..fork/$PATCH_BRANCH")
+          [ -n "$commits" ] || { echo "reason=\`$PATCH_BRANCH\` has no commits on top of upstream dev." >> "$GITHUB_OUTPUT"; exit 1; }
+          # The Unreleased section of CHANGELOG.md never matches a release tag;
+          # keep the release's file. A conflict anywhere else means the patch
+          # needs a human.
+          for c in $commits; do
+            if ! git cherry-pick --no-commit "$c"; then
+              conflicted=$(git diff --name-only --diff-filter=U)
+              if [ "$conflicted" != "CHANGELOG.md" ]; then
+                git cherry-pick --abort 2>/dev/null || git reset -q --hard
+                echo "reason=\`$PATCH_BRANCH\` no longer applies on ${{ steps.release.outputs.tag }} (conflicts: $(echo $conflicted)): rebase it and re-run this workflow." >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+              git checkout --ours CHANGELOG.md
+              git add CHANGELOG.md
+            fi
+            git commit -q -C "$c"
+          done
+          git log --oneline -n "$(echo "$commits" | wc -l)"
+
+      - name: Set up Python
+        if: steps.exists.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Run G-code injection tests
+        id: tests
+        if: steps.exists.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          pip install -q -r requirements.txt -r requirements-dev.txt
+          if ! python -m pytest -q backend/tests/unit/test_gcode_injection.py; then
+            echo "reason=G-code injection tests fail on ${{ steps.release.outputs.tag }} with the patch applied." >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Buildx
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.release.outputs.image }}:${{ steps.release.outputs.image_tag }}
+          # `source` points at upstream so release notes resolve to the real project.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ env.UPSTREAM }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.release.outputs.image_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REASON: ${{ steps.patch.outputs.reason || steps.tests.outputs.reason || 'build step failed' }}
+        run: |
+          set -euo pipefail
+          body="Upstream release: \`${{ steps.release.outputs.tag }}\`
+          Target image: \`${{ steps.release.outputs.image }}:${{ steps.release.outputs.image_tag }}\`
+
+          ${REASON}
+
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          The homeserver keeps running the previous image until this is fixed."
+          existing=$(gh issue list -R "${{ github.repository }}" --state open --search "\"$ISSUE_TITLE\" in:title" \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" -R "${{ github.repository }}" --body "$body"
+          else
+            gh issue create -R "${{ github.repository }}" --title "$ISSUE_TITLE" --body "$body"
+          fi
